@@ -3,7 +3,7 @@
 ║                                                                  ║
 ║    H Y B R I D R E C                                             ║
 ║    ─────────────────────────────────────────────────────────     ║
-║    Hybrid Recommender System · Leona Goel       ║
+║    Hybrid Recommender System · Leona Goel      
 ║                                                                  ║
 ╚══════════════════════════════════════════════════════════════════╝
 ```
