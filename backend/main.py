@@ -333,17 +333,18 @@ def build_models():
 # ── Recommendations ────────────────────────────────────────────────
 
 @app.get("/api/recommend/{item_title}")
-def get_recommendations(item_title: str, top_n: int = 10):
+def get_recommendations(item_title: str, top_n: int = 10, explain: bool = Query(False)):
     """Get hybrid recommendations for an item."""
     if not models["ready"]:
         raise HTTPException(400, "Models not built. Build first via /api/build.")
-    recs = models["hybrid"].recommend(item_title, top_n=top_n)
+    recs = models["hybrid"].recommend(item_title, top_n=top_n, explain=explain)
     if not recs:
         raise HTTPException(404, "Item not found or no recommendations.")
     return {
         "query_item": item_title,
         "recommendations": recs,
         "weights": models["hybrid"].get_weights(),
+        "explain": explain,
     }
 
 
