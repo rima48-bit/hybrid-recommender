@@ -214,6 +214,9 @@ def adapt_data(df):
     if purchase_col: rename_map[purchase_col] = 'purchases'
 
     df = df.rename(columns=rename_map)
+    # Safety net: drop duplicate columns that may arise when both an exact match
+    # (e.g. 'title') and a partial match (e.g. 'original_title') exist in the dataset.
+    df = df.loc[:, ~df.columns.duplicated()]
 
     # ── resolve 'title' ─────────────────────────
     # FIX: old code fell back to iloc[:,0] which picked up numeric book_id.
