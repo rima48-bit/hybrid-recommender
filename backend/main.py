@@ -498,7 +498,7 @@ def create_purchase(data: PurchaseCreate):
     }).execute()
     return {"purchase": result.data}
 
-@main.route("/health")
+@app.route("/health")
 def health_check():
     """
     Returns server status. Useful for uptime monitors and Docker health checks.
