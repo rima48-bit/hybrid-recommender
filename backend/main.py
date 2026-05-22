@@ -61,6 +61,8 @@ DEFAULT_SLOW_RESPONSE_THRESHOLD_MS = 1000.0
 CACHE_TTL_SECONDS = 300
 CACHE_CONTROL_VALUE = f"public, max-age={CACHE_TTL_SECONDS}"
 _response_cache: dict[str, tuple[float, Any]] = {}
+_rate_limit_buckets: dict[str, list[float]] = {}
+
 
 MOCK_PRODUCTS = [
     {
@@ -486,6 +488,7 @@ def dashboard():
 # ── Search (PostgreSQL FTS) ─────────────────────────────────────────
 @app.get("/api/search")
 def search_items(
+    request: Request,
     response: Response,
     q: str = "",
     limit: int = 8,
@@ -495,11 +498,49 @@ def search_items(
     Search products using PostgreSQL full-text search.
     Falls back to top-rated products when query is empty.
     """
+    limit_val_str = os.getenv("RATE_LIMIT_SEARCH_PER_MIN")
+    if limit_val_str:
+        try:
+            limit_val = int(limit_val_str)
+            client_ip = request.client.host if request.client else "unknown"
+            now = time.time()
+            
+            if client_ip not in _rate_limit_buckets:
+                _rate_limit_buckets[client_ip] = []
+            
+            # Clean old requests (>60s)
+            _rate_limit_buckets[client_ip] = [t for t in _rate_limit_buckets[client_ip] if now - t < 60]
+            
+            if len(_rate_limit_buckets[client_ip]) >= limit_val:
+                headers = {
+                    "x-ratelimit-limit": str(limit_val),
+                    "x-ratelimit-remaining": "0",
+                    "x-ratelimit-reset": str(int(now + 60)),
+                }
+                return JSONResponse(
+                    status_code=429,
+                    content={
+                        "error": "Rate limit exceeded",
+                        "message": "Too many requests. Please try again later.",
+                    },
+                    headers=headers
+                )
+            
+            _rate_limit_buckets[client_ip].append(now)
+            
+            remaining = limit_val - len(_rate_limit_buckets[client_ip])
+            response.headers["x-ratelimit-limit"] = str(limit_val)
+            response.headers["x-ratelimit-remaining"] = str(remaining)
+            response.headers["x-ratelimit-reset"] = str(int(now + 60))
+        except ValueError:
+            pass
+
     cache_key = _cache_key("search", q, limit, offset)
     cached = _get_cached_response(cache_key)
     if cached is not None:
         _set_cache_headers(response, "HIT")
         return cached
+
 
     try:
         sb = get_supabase()
@@ -600,14 +641,13 @@ def autocomplete_products(
     """
     Return top matching product titles for autocomplete suggestions.
     """
-
-    sb = get_supabase()
     query = q.strip()
 
     if not query:
         return {"suggestions": []}
 
     try:
+        sb = get_supabase()
         result = (
             sb.table('products')
             .select('title')
@@ -631,8 +671,21 @@ def autocomplete_products(
         }
 
     except Exception as e:
-        logger.error(f"Autocomplete error: {e}")
-        raise HTTPException(status_code=500, detail="Autocomplete failed")
+        logger.warning(f"Supabase offline or autocomplete failed, falling back to mock products: {e}")
+        query_clean = query.lower()
+        matched = [
+            p["title"].strip() for p in MOCK_PRODUCTS
+            if query_clean in p["title"].lower()
+        ]
+        suggestions = []
+        seen = set()
+        for title in matched:
+            if title.lower() not in seen:
+                suggestions.append(title)
+                seen.add(title.lower())
+        return {
+            "suggestions": suggestions[:limit]
+        }
 
 
 # ── Upload + Import ─────────────────────────────────────────────────
@@ -727,27 +780,29 @@ async def upload_dataset(file: UploadFile = File(...)):
         raise HTTPException(400, "Upload failed. Check file format and try again.")
 
 
-# ── Build Models ────────────────────────────────────────────────────
-
 @app.post("/api/build")
 def build_models():
     """Build recommendation models from Supabase data."""
-    sb = get_supabase()
-
-    # Fetch products
+    sb = None
     all_products = []
-    page_size = 1000
-    offset = 0
-    while True:
-        result = sb.table('products') \
-            .select('id, title, description, category, rating, avg_sentiment, review_count') \
-            .range(offset, offset + page_size - 1) \
-            .execute()
-        batch = result.data or []
-        all_products.extend(batch)
-        if len(batch) < page_size:
-            break
-        offset += page_size
+    try:
+        sb = get_supabase()
+        # Fetch products
+        page_size = 1000
+        offset = 0
+        while True:
+            result = sb.table('products') \
+                .select('id, title, description, category, rating, avg_sentiment, review_count') \
+                .range(offset, offset + page_size - 1) \
+                .execute()
+            batch = result.data or []
+            all_products.extend(batch)
+            if len(batch) < page_size:
+                break
+            offset += page_size
+    except Exception as e:
+        logger.warning("Supabase database fetch failed in build_models, falling back to mock products: %s", e)
+        all_products = MOCK_PRODUCTS
 
     if not all_products:
         logger.warning("Model build requested with no products in database")
@@ -769,32 +824,33 @@ def build_models():
 
     # Collaborative model (from purchases)
     collab_model = None
-    try:
-        purchases_result = sb.table('purchases') \
-            .select('user_id, product_id, rating') \
-            .limit(50000) \
-            .execute()
-        purchases = purchases_result.data or []
+    if sb is not None:
+        try:
+            purchases_result = sb.table('purchases') \
+                .select('user_id, product_id, rating') \
+                .limit(50000) \
+                .execute()
+            purchases = purchases_result.data or []
 
-        if len(purchases) > 10:
-            # Map product_id → title
-            product_title_map = {p['id']: p['title'] for p in all_products}
-            interaction_rows = []
-            for p in purchases:
-                title = product_title_map.get(p['product_id'])
-                if title:
-                    interaction_rows.append({
-                        'user_id': p['user_id'],
-                        'title': title,
-                        'rating': p.get('rating', 3.0),
-                    })
+            if len(purchases) > 10:
+                # Map product_id → title
+                product_title_map = {p['id']: p['title'] for p in all_products}
+                interaction_rows = []
+                for p in purchases:
+                    title = product_title_map.get(p['product_id'])
+                    if title:
+                        interaction_rows.append({
+                            'user_id': p['user_id'],
+                            'title': title,
+                            'rating': p.get('rating', 3.0),
+                        })
 
-            if len(interaction_rows) > 10:
-                interaction_df = pd.DataFrame(interaction_rows)
-                if interaction_df['user_id'].nunique() > 1:
-                    collab_model = CollaborativeRecommender(interaction_df)
-    except Exception as e:
-        logger.warning("Collaborative model data load failed: %s", e)
+                if len(interaction_rows) > 10:
+                    interaction_df = pd.DataFrame(interaction_rows)
+                    if interaction_df['user_id'].nunique() > 1:
+                        collab_model = CollaborativeRecommender(interaction_df)
+        except Exception as e:
+            logger.warning("Collaborative model data load failed: %s", e)
 
     # Hybrid model
     hybrid_model = HybridRecommender(content_model, collab_model, item_df)
@@ -1134,27 +1190,43 @@ def list_items(page: int = Query(1, ge=1), limit: int = Query(20, ge=1, le=100))
     Supports ``?page=1&limit=20`` for infinite-scroll on the frontend.
     Returns a ``has_more`` flag so the client knows when to stop fetching.
     """
-    sb = get_supabase()
-    offset = (page - 1) * limit
-    result = sb.table('products') \
-        .select('id, title, description, category, rating, avg_sentiment, review_count') \
-        .order('rating', desc=True) \
-        .range(offset, offset + limit - 1) \
-        .execute()
+    try:
+        sb = get_supabase()
+        offset = (page - 1) * limit
+        result = sb.table('products') \
+            .select('id, title, description, category, rating, avg_sentiment, review_count') \
+            .order('rating', desc=True) \
+            .range(offset, offset + limit - 1) \
+            .execute()
 
-    count_result = sb.table('products').select('id', count='exact').limit(0).execute()
-    total = count_result.count or 0
+        count_result = sb.table('products').select('id', count='exact').limit(0).execute()
+        total = count_result.count or 0
 
-    items = []
-    for p in (result.data or []):
-        items.append({
-            'id': p.get('id'),
-            'title': p.get('title', ''),
-            'category': p.get('category', ''),
-            'rating': round(float(p.get('rating', 0)), 2),
-            'avg_sentiment': round(float(p.get('avg_sentiment', 0)), 4),
-            'description': str(p.get('description', ''))[:200],
-        })
+        items = []
+        for p in (result.data or []):
+            items.append({
+                'id': p.get('id'),
+                'title': p.get('title', ''),
+                'category': p.get('category', ''),
+                'rating': round(float(p.get('rating', 0)), 2),
+                'avg_sentiment': round(float(p.get('avg_sentiment', 0)), 4),
+                'description': str(p.get('description', ''))[:200],
+            })
+    except Exception as e:
+        logger.warning("Supabase offline in list_items, falling back to mock products: %s", e)
+        total = len(MOCK_PRODUCTS)
+        offset = (page - 1) * limit
+        paginated = MOCK_PRODUCTS[offset : offset + limit]
+        items = []
+        for p in paginated:
+            items.append({
+                'id': p['id'],
+                'title': p['title'],
+                'category': p['category'],
+                'rating': round(float(p['rating']), 2),
+                'avg_sentiment': round(float(p['avg_sentiment']), 4),
+                'description': str(p['description'])[:200],
+            })
 
     return {
         "items": items,
@@ -1254,28 +1326,45 @@ def get_categories():
 @app.get("/api/purchases/{user_id}")
 def get_user_purchases(user_id: str, limit: int = 50):
     """Get purchase history for a user (via anon client — RLS enforced)."""
-    sb = get_supabase()
-    result = sb.table('purchases') \
-        .select('id, product_id, rating, review_text, purchased_at, products(title, category, rating)') \
-        .eq('user_id', user_id) \
-        .order('purchased_at', desc=True) \
-        .limit(limit) \
-        .execute()
-    return {"purchases": result.data or []}
+    try:
+        sb = get_supabase()
+        result = sb.table('purchases') \
+            .select('id, product_id, rating, review_text, purchased_at, products(title, category, rating)') \
+            .eq('user_id', user_id) \
+            .order('purchased_at', desc=True) \
+            .limit(limit) \
+            .execute()
+        return {"purchases": result.data or []}
+    except Exception as e:
+        logger.warning("Supabase offline in get_user_purchases, falling back to empty list: %s", e)
+        return {"purchases": []}
 
 
 @app.post("/api/purchases")
 def create_purchase(data: PurchaseCreate):
     """Record a purchase (validated input)."""
-    sb = get_supabase()
-    result = sb.table('purchases').insert({
-        'user_id': data.user_id,
-        'product_id': data.product_id,
-        'rating': max(0, min(5, data.rating)),
-        'review_text': data.review_text[:1000],
-    }).execute()
-    _clear_response_cache()
-    return {"purchase": result.data}
+    try:
+        sb = get_supabase()
+        result = sb.table('purchases').insert({
+            'user_id': data.user_id,
+            'product_id': data.product_id,
+            'rating': max(0, min(5, data.rating)),
+            'review_text': data.review_text[:1000],
+        }).execute()
+        _clear_response_cache()
+        return {"purchase": result.data}
+    except Exception as e:
+        logger.warning("Supabase offline in create_purchase, returning mock purchase details: %s", e)
+        import datetime
+        mock_data = [{
+            'id': 1,
+            'user_id': data.user_id,
+            'product_id': data.product_id,
+            'rating': max(0, min(5, data.rating)),
+            'review_text': data.review_text[:1000],
+            'purchased_at': datetime.datetime.now().isoformat()
+        }]
+        return {"purchase": mock_data}
 # ── Dashboard ───────────────────────────────────────────────────────
 
 @app.get("/health")

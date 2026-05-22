@@ -35,13 +35,13 @@ const state = {
     isLoading: false,
     hasMore: true,
     searchTimer: null,
-    searchResults: [],
     autocompleteResults: [],
     selectedSearchIdx: -1,
     isAuthSignUp: false,
     modelReady: false,
     scrollObserver: null,
     compareList: [],
+    heatmapSelected: [],
     filters: {
         category: '',
         rating: '',
@@ -397,25 +397,7 @@ function initTypeToSearch() {
     });
 }
 
-// ── Search ──────────────────────────────────────────────────────────
-async function handleSearch(query) {
-    if (!query || query.length < 1) {
-        closeSearchDropdown();
-        return;
-    }
-
-    clearTimeout(state.searchTimer);
-    state.searchTimer = setTimeout(async () => {
-        try {
-            const data = await API.get(`/api/search?q=${encodeURIComponent(query)}&limit=8`);
-            state.searchResults = data.items || [];
-            state.selectedSearchIdx = -1;
-            renderSearchDropdown(state.searchResults, query);
-        } catch {
-            closeSearchDropdown();
-        }
-    }, 200);
-}
+// ── Search Dropdown ──────────────────────────────────────────────────
 
 function renderSearchDropdown(results, query) {
     if (!results.length) {
@@ -487,6 +469,23 @@ window.addEventListener('click', (e) => {
 function handleSearchKeydown(e) {
     const results = state.autocompleteResults;
 
+    if (e.key === 'Enter') {
+        e.preventDefault();
+
+        if (state.selectedSearchIdx >= 0 && results.length && els.searchDropdown.classList.contains('active')) {
+            const selected = results[state.selectedSearchIdx];
+            selectSearchResult(selected);
+        } else if (els.searchInput.value.trim().length > 0) {
+            selectSearchResult(els.searchInput.value.trim());
+        }
+        return;
+    }
+
+    if (e.key === 'Escape') {
+        closeSearchDropdown();
+        return;
+    }
+
     if (!results.length || !els.searchDropdown.classList.contains('active')) {
         return;
     }
@@ -511,19 +510,6 @@ function handleSearchKeydown(e) {
         );
 
         renderSearchDropdown(results, els.searchInput.value);
-    }
-
-    else if (e.key === 'Enter') {
-        e.preventDefault();
-
-        if (state.selectedSearchIdx >= 0) {
-            const selected = results[state.selectedSearchIdx];
-            selectSearchResult(selected);
-        }
-    }
-
-    else if (e.key === 'Escape') {
-        closeSearchDropdown();
     }
 }
 
@@ -694,7 +680,7 @@ async function loadSearchResults(query) {
 
     try {
         const data = await API.get(`/api/search?q=${encodeURIComponent(query)}&limit=40`);
-        const products = data.items || [];
+        const products = data.results || data.items || [];
         els.skeletonLoader.hidden = true;
         els.productCount.textContent = `${products.length} results`;
         state.products = [];
