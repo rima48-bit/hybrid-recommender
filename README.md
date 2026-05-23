@@ -382,6 +382,9 @@ git merge upstream/main
 MIT — see [`LICENSE`](LICENSE)
 
 ---
+## Documentation
+
+- [CHANGELOG](CHANGELOG.md)
 
 <div align="center">
 
