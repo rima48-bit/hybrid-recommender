@@ -1,317 +1,308 @@
-# 🤝 Contributing to hybrid-recommender
-
 <div align="center">
 
-![Contributing Banner](https://readme-typing-svg.demolab.com?font=Fira+Code&size=30&weight=700&pause=1000&color=1ABC9C&center=true&width=600&lines=Welcome+Contributors!;Let's+Build+Amazing+Projects;Together!)
+![Typing SVG](https://readme-typing-svg.demolab.com?font=JetBrains+Mono&weight=700&size=28&duration=3000&pause=800&color=6C63FF&center=true&vCenter=true&multiline=true&width=700&height=80&lines=Contributing+to+hybrid-recommender)
+
+![Typing SVG](https://readme-typing-svg.demolab.com?font=JetBrains+Mono&size=16&duration=2500&pause=600&color=A78BFA&center=true&vCenter=true&width=700&lines=collaborative+filtering+%2B+content-based+approaches;built+by+the+community%2C+for+the+community;every+contribution+improves+the+signal+%F0%9F%8E%AF)
 
 </div>
 
-Thank you for your interest in contributing to **hybrid-recommender**! We're excited to have you join our community. This guide will help you get started and make your first contribution.
+---
 
-## 📋 Table of Contents
-
-1. [🌟 Ways to Contribute](#-ways-to-contribute)
-2. [🚀 Getting Started](#-getting-started)
-3. [📁 Project Structure](#-project-structure)
-4. [🐛 Bug Reports & Issues](#-bug-reports--issues)
-5. [📝 Pull Request Process](#-pull-request-process)
-6. [🎨 Code Style Guidelines](#-code-style-guidelines)
-7. [✅ Testing](#-testing)
-8. [📞 Getting Help](#-getting-help)
+We welcome contributions from everyone — whether you're fine-tuning a model, squashing a bug, or improving a docstring. This guide covers everything you need to get started.
 
 ---
 
-## 🌟 Ways to Contribute
+## Table of Contents
 
-### 🔧 Improving the Recommender System
-- Fix bugs in existing recommendation logic
-- Enhance model performance
-- Improve code quality and structure
-
-### 📚 Documentation
-- Improve README files
-- Add setup guides
-- Fix typos and formatting
-
-### 🎨 UI/UX Improvements
-- Enhance visual design of the frontend
-- Improve user experience
-- Make the interface mobile-friendly
-
-### 🧪 Testing
-- Add test cases for existing features
-- Improve test coverage
-- Report bugs with clear reproduction steps
+- [Before You Begin](#before-you-begin)
+- [How the Project is Structured](#how-the-project-is-structured)
+- [Setting Up Locally](#setting-up-locally)
+- [Finding Something to Work On](#finding-something-to-work-on)
+- [Contribution Limits](#contribution-limits)
+- [Making Your Contribution](#making-your-contribution)
+- [Pull Request Guidelines](#pull-request-guidelines)
+- [Code Standards](#code-standards)
+- [Testing](#testing)
+- [Getting Help](#getting-help)
 
 ---
 
-## 🚀 Getting Started
+## Before You Begin
 
-### 1. Fork & Clone
-
-```bash
-# Fork the repository on GitHub, then clone your fork
-git clone https://github.com/YOUR-USERNAME/hybrid-recommender.git
-cd hybrid-recommender
-```
-
-### 2. Set Up Remote
-
-```bash
-# Add the original repository as upstream
-git remote add upstream https://github.com/leonagoel/hybrid-recommender.git
-```
-
-### 3. Create a Branch
-
-```bash
-# Create a new branch for your contribution
-git checkout -b feature/your-feature-name
-# or
-git checkout -b fix/bug-description
-# or
-git checkout -b docs/update-description
-```
-
-### 4. Set Up Environment
-
-```bash
-# Install dependencies
-npm install
-
-# Create environment variables
-cp .env.example .env.local
-# Edit .env.local with your credentials
-```
-
-### 5. Run Locally
-
-```bash
-npm run dev
-# → http://localhost:3000
-```
+- Search [existing issues](https://github.com/leonagoel/hybrid-recommender/issues) before opening a new one
+- For large changes (new features, architecture changes), open a discussion first
+- Read through the [README](README.md) to understand how the recommender works
+- Be respectful — we're all here to learn and build
 
 ---
 
-## 📁 Project Structure
+## How the Project is Structured
 
 ```
 hybrid-recommender/
-├── frontend/          # Frontend application
-├── backend/           # Backend API and recommendation logic
-├── src/               # Core source files
-├── datasets/          # Dataset files
-├── scripts/           # Utility scripts
-├── tests/             # Test files
-├── supabase/          # Supabase configuration
-├── .github/workflows/ # CI/CD pipelines
-├── .env.example       # Environment variable template
-└── README.md          # Project overview
+├── backend/           # Python — recommendation logic, APIs
+│   ├── models/        # Collaborative + content-based models
+│   ├── api/           # REST endpoints
+│   └── utils/         # Shared utilities
+├── frontend/          # JavaScript — user interface
+│   ├── src/
+│   └── public/
+├── datasets/          # Sample and test datasets
+├── scripts/           # Data processing and setup scripts
+├── tests/             # Test suites (Python + JS)
+├── supabase/          # DB schema and edge functions
+└── .github/workflows/ # Automation and CI
 ```
 
 ---
 
-## 🐛 Bug Reports & Issues
+## Setting Up Locally
 
-### Before Submitting
-- Search existing issues to avoid duplicates
-- Test on different browsers if applicable
-- Check if it's already fixed in the latest version
+### Prerequisites
+- Python 3.9+
+- Node.js 18+
+- Git
 
-### Contribution Limits
-- **Per-person limit:** Max 3 open Issues & 3 open PRs at a time
-- Please close or complete existing work before opening new ones
-- Focus on one issue/PR at a time for quality contributions
-
-### Issue Template
-
-```markdown
-**Bug Description**
-Clear description of the bug
-
-**Steps to Reproduce**
-1. Go to...
-2. Click on...
-3. See error
-
-**Expected Behavior**
-What you expected to happen
-
-**Screenshots**
-Add screenshots if applicable
-
-**Environment**
-- Browser: [e.g. Chrome, Firefox]
-- OS: [e.g. Windows, macOS, Linux]
-- Node version: [e.g. 18.x]
-```
-
----
-
-## 📝 Pull Request Process
-
-### 1. Keep Your Fork Updated
+### Steps
 
 ```bash
+# 1. Fork the repo, then clone your fork
+git clone https://github.com/YOUR-USERNAME/hybrid-recommender.git
+cd hybrid-recommender
+
+# 2. Add upstream remote
+git remote add upstream https://github.com/leonagoel/hybrid-recommender.git
+
+# 3. Backend setup
+cd backend
+python -m venv venv
+source venv/bin/activate        # Windows: venv\Scripts\activate
+pip install -r requirements.txt
+
+# 4. Frontend setup
+cd ../frontend
+npm install
+
+# 5. Environment variables
+cp .env.example .env.local
+# Fill in your credentials in .env.local
+
+# 6. Run both
+# Terminal 1 — backend
+cd backend && uvicorn main:app --reload
+
+# Terminal 2 — frontend
+cd frontend && npm run dev
+```
+
+---
+
+## Finding Something to Work On
+
+| Label | What it means |
+|-------|--------------|
+| `good first issue` | Self-contained, well-scoped — great starting point |
+| `level:beginner` | Minimal context needed, clear expected output |
+| `level:intermediate` | Requires understanding of the codebase |
+| `level:advanced` | ML model changes, architecture work |
+| `ml/ai` | Touches recommendation logic |
+| `frontend` | UI/UX work |
+| `bug` | Something is broken |
+| `documentation` | Docs, comments, guides |
+
+Browse open issues → [github.com/leonagoel/hybrid-recommender/issues](https://github.com/leonagoel/hybrid-recommender/issues)
+
+Leave a comment on an issue to claim it before starting work.
+
+---
+
+## Contribution Limits
+
+To keep the project manageable and fair for everyone:
+
+- **Max 3 open issues** assigned to you at a time
+- **Max 3 open PRs** from you at a time
+- Close or complete existing work before picking up new items
+- If you claimed an issue but can't continue, leave a comment so someone else can take over
+
+---
+
+## Making Your Contribution
+
+```bash
+# 1. Sync your fork with upstream
 git fetch upstream
 git checkout main
 git merge upstream/main
-```
 
-### 2. Commit Changes
+# 2. Create a branch
+git checkout -b fix/cold-start-bug
+# or
+git checkout -b feat/content-based-filter
+# or
+git checkout -b docs/setup-guide
 
-```bash
+# 3. Make your changes, then commit
 git add .
-git commit -m "feat: add new recommendation algorithm"
-# or
-git commit -m "fix: resolve cold start issue"
-# or
-git commit -m "docs: update setup instructions"
-```
+git commit -m "fix: handle cold start for new users"
 
-Use present tense (`Add feature` not `Added feature`) and keep the first line under 50 characters.
-
-### 3. Push and Create PR
-
-```bash
+# 4. Push
 git push origin your-branch-name
 ```
 
-Then create a Pull Request on GitHub with:
-- Clear title and description
-- Reference any related issues (`Closes #123`)
-- Screenshots if applicable
-- List of changes made
+### Commit Message Format
 
-### PR Template
+```
+<type>: <short description>
 
-```markdown
-## Description
-Brief description of changes
-
-## Related Issue
-Closes #
-
-## Type of Change
-- [ ] Bug fix
-- [ ] New feature
-- [ ] Documentation update
-- [ ] Performance improvement
-
-## Changes Made
-- Detailed list of changes
-
-## Testing
-How to test the changes
-
-## Screenshots (if applicable)
-For UI changes, include before/after screenshots
-
-## Checklist
-- [ ] Code follows style guidelines
-- [ ] Self-review completed
-- [ ] Documentation updated
-- [ ] No merge conflicts
-- [ ] No sensitive data committed
+Types: feat | fix | docs | refactor | test | chore
 ```
 
-### Review Process
-- At least 1 maintainer review required
-- All conversations must be resolved
-- Feedback addressed before merge
+Examples:
+- `feat: add cosine similarity scoring to content model`
+- `fix: correct NaN handling in collaborative filter`
+- `docs: add dataset preparation guide`
+- `test: add unit tests for recommendation pipeline`
 
 ---
 
-## 🎨 Code Style Guidelines
+## Pull Request Guidelines
 
-### JavaScript / TypeScript
-- Use `const`/`let` instead of `var`
-- Use arrow functions where appropriate
-- Add comments for complex logic
-- Handle errors gracefully
-- Follow ESLint rules enforced in the project
+### PR Description Template
+
+```markdown
+## What does this PR do?
+<!-- A clear summary of the change -->
+
+## Related issue
+Closes #
+
+## Type of change
+- [ ] Bug fix
+- [ ] New feature
+- [ ] Refactor
+- [ ] Documentation
+- [ ] Tests
+
+## How to test this
+<!-- Steps to verify your change works -->
+
+## Screenshots (if UI change)
+```
+
+### Before you submit
+
+- [ ] Synced with latest `main`
+- [ ] No merge conflicts
+- [ ] Tested locally (both backend and frontend if applicable)
+- [ ] No hardcoded credentials or API keys
+- [ ] Relevant tests added or updated
+- [ ] Docstrings/comments added for new functions
+
+### Review process
+- At least one maintainer review is required before merging
+- Address all review comments before re-requesting review
+- Be responsive — PRs inactive for 7 days may be closed
+
+---
+
+## Code Standards
+
+### Python (backend)
+
+- Follow [PEP 8](https://pep8.org/)
+- Use type hints for function signatures
+- Write docstrings for all public functions
+
+```python
+# Good
+def compute_similarity(user_id: int, item_id: int) -> float:
+    """
+    Compute cosine similarity between user and item vectors.
+
+    Args:
+        user_id: ID of the user
+        item_id: ID of the item
+
+    Returns:
+        Similarity score between 0 and 1
+    """
+    ...
+
+# Avoid
+def sim(u, i):
+    # does stuff
+    ...
+```
+
+### JavaScript (frontend)
+
+- Use `const`/`let`, not `var`
+- Prefer arrow functions
+- Handle errors explicitly — no silent failures
 
 ```javascript
 // Good
 const fetchRecommendations = async (userId) => {
   try {
-    const results = await getRecommendations(userId);
-    return results;
+    const data = await api.get(`/recommend/${userId}`);
+    return data;
   } catch (error) {
-    console.error('Failed to fetch recommendations:', error);
+    console.error('Recommendation fetch failed:', error);
+    throw error;
   }
 };
 
 // Avoid
 function getRec(id) {
-  var x = getRecommendations(id);
-  return x;
+  return api.get('/recommend/' + id);
 }
 ```
 
-### General
-- Use meaningful variable and function names
-- Keep functions small and focused
-- Group related logic together
-- Remove unused imports and dead code
+---
+
+## Testing
+
+### Python tests
+
+```bash
+cd backend
+pytest tests/
+```
+
+### Frontend tests
+
+```bash
+cd frontend
+npm run test
+```
+
+### What to test
+- New functions should have at least one unit test
+- Bug fixes should include a test that would have caught the bug
+- Don't break existing tests — run the full suite before submitting
 
 ---
 
-## ✅ Testing
+## Getting Help
 
-### Manual Testing Checklist
-- [ ] Feature works as expected end-to-end
-- [ ] No console errors or warnings
-- [ ] Tested on Chrome and Firefox
-- [ ] Responsive design checked on mobile
-- [ ] Different user roles tested if applicable
+- 💬 **Discussions** — questions, ideas, design decisions → [Discussion Board](https://github.com/leonagoel/hybrid-recommender/discussions)
+- 🐛 **Issues** — bugs and feature requests → [Issues](https://github.com/leonagoel/hybrid-recommender/issues)
+- 📖 **Docs** — project overview → [README](README.md)
 
-### Before Submitting a PR
-- [ ] Run `npm run dev` and verify no build errors
-- [ ] Run `npm run build` to confirm production build passes
-- [ ] Verify no sensitive data (API keys, tokens) is committed
+If you're stuck on something, open a discussion rather than sitting on it — the community is here to help.
 
 ---
 
-## 🔒 Security
+## Security
 
-**Do not** include sensitive information in pull requests:
-- API keys, tokens, or credentials
-- Database URIs with passwords
-- Private encryption keys
-- Personal information
+Never commit:
+- API keys or tokens
+- Database connection strings with credentials
+- `.env` files or any secrets
 
-If you find a security vulnerability, please open a private issue rather than a public one.
-
----
-
-## 📞 Getting Help
-
-- 💬 **GitHub Discussions**: Ask questions and get help from the community → [Discussion Board](https://github.com/leonagoel/hybrid-recommender/discussions)
-- 🐛 **Issues**: Report bugs or request features → [Issues](https://github.com/leonagoel/hybrid-recommender/issues)
-- 📖 **README**: Review the [README.md](README.md) for project overview
+If you discover a security vulnerability, please open a **private** issue rather than a public one.
 
 ---
 
-## 🏆 Recognition
-
-Contributors will be:
-- Added to our contributors wall
-- Mentioned in release notes
-- Given credit in project documentation
-
----
-
-## 📜 Code of Conduct
-
-Please be respectful and inclusive in all interactions. We strive to create a welcoming environment for developers of all backgrounds and experience levels.
-
----
-
-<div align="center">
-
-**🌟 Thank you for contributing to hybrid-recommender! 🌟**
-
-**Your contributions help make better recommendations for everyone!**
-
-</div>
+*Thank you for contributing. Every improvement — big or small — makes the recommender better for everyone.*
