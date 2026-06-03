@@ -1,11 +1,9 @@
-name: CI — Lint, Smoke & E2E Testing Suite
-
+name: CI
 on:
-  pull_request:
-    branches: [main]
   push:
-    branches: [main]
-
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
 jobs:
   lint:
     name: PEP8 Lint (flake8)
@@ -68,10 +66,9 @@ jobs:
     name: End-to-End API Test Suite
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@v3
+      - name: Use Node.js
+        uses: actions/setup-node@v3
         with:
           python-version: '3.10'
 
