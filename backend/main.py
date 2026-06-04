@@ -20,12 +20,13 @@ from redis.exceptions import RedisError
 try:
     import bleach
 except ModuleNotFoundError:
+    import html
     class bleach:
         @staticmethod
         def clean(value, strip=True):
             if not strip:
                 return str(value)
-            return re.sub(r"<[^>]*>", "", str(value))
+            return html.escape(str(value))
 
 from collections import deque, Counter
 from threading import Lock
@@ -80,6 +81,7 @@ from src.model.nlp_engine import batch_analyze, aggregate_sentiment_by_item
 from src.model.content_model import ContentRecommender
 from src.model.collaborative_model import CollaborativeRecommender
 from src.model.hybrid_model import HybridRecommender
+from src.model.trending_model import TrendingRecommender
 from src.model.issue_triage import triage_issue
 from src.model.federated_learning import train_federated_collaborative_model
 from src.api.response_utils import success_response, error_response
@@ -454,6 +456,11 @@ def _apply_rate_limit(
         reset_time = int(60 - (now - timestamps[0])) if timestamps else 60
         reset_time = max(0, reset_time)
 
+        # Garbage Collection: Remove empty buckets to prevent memory leak
+        empty_keys = [k for k, v in _rate_limit_buckets.items() if not v]
+        for k in empty_keys:
+            del _rate_limit_buckets[k]
+
     response.headers["x-ratelimit-limit"] = str(rate_limit)
     response.headers["x-ratelimit-remaining"] = str(remaining)
     response.headers["x-ratelimit-reset"] = str(reset_time)
@@ -484,6 +491,8 @@ def _require_admin_access(request: Request) -> None:
     )
     if not provided_token or not secrets.compare_digest(provided_token, expected_token):
         raise HTTPException(status_code=401, detail="Admin token required.")
+    def _admin_access_dep(request: Request):
+        _require_admin_access(request)
 
 _admin_access_dep = _require_admin_access
 
@@ -1281,7 +1290,15 @@ async def upload_dataset(
 ):
     """Upload a CSV or JSON dataset and import into Supabase."""
     import math
-    filename = file.filename or "data.csv"
+    import re
+    import uuid
+    raw_filename = os.path.basename(file.filename or "data.csv")
+    if not re.match(r'^[a-zA-Z0-9_\-]+\.(csv|json)$', raw_filename):
+        raw_filename = f"{uuid.uuid4().hex}.csv"
+    filename = raw_filename
+    UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    safe_path = os.path.join(UPLOAD_DIR, filename)
     ext = os.path.splitext(filename)[1].lower()
     if ext not in ('.csv', '.json'):
         raise HTTPException(400, "Only CSV and JSON files are supported.")
@@ -2238,13 +2255,41 @@ def get_trending_products(
         .execute()
 
     rows = result.data or []
-
     if not rows:
-        response = {"results": [], "days": days, "limit": limit}
-        TRENDING_CACHE[cache_key] = (now, response)
-        return response
+        try:
+            trending_model = TrendingRecommender()
+
+            trending_products = trending_model.get_trending_products(
+                top_n=limit
+            )
+
+            response = {
+                "results": trending_products,
+                "days": days,
+                "limit": limit,
+                "source": "fallback_dataset"
+            }
+
+            TRENDING_CACHE[cache_key] = (now, response)
+            return response
+
+        except Exception as e:
+            logger.error(
+                "Trending fallback failed: %s",
+                e
+            )
+
+            response = {
+                "results": [],
+                "days": days,
+                "limit": limit
+            }
+
+            TRENDING_CACHE[cache_key] = (now, response)
+            return response
 
     from collections import defaultdict
+
     stats = defaultdict(lambda: {
         "count": 0,
         "ratings": [],
