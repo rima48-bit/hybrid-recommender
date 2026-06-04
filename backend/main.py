@@ -1269,7 +1269,15 @@ async def upload_dataset(
 ):
     """Upload a CSV or JSON dataset and import into Supabase."""
     import math
-    filename = file.filename or "data.csv"
+    import re
+    import uuid
+    raw_filename = os.path.basename(file.filename or "data.csv")
+    if not re.match(r'^[a-zA-Z0-9_\-]+\.(csv|json)$', raw_filename):
+        raw_filename = f"{uuid.uuid4().hex}.csv"
+    filename = raw_filename
+    UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "uploads")
+    os.makedirs(UPLOAD_DIR, exist_ok=True)
+    safe_path = os.path.join(UPLOAD_DIR, filename)
     ext = os.path.splitext(filename)[1].lower()
     if ext not in ('.csv', '.json'):
         raise HTTPException(400, "Only CSV and JSON files are supported.")
