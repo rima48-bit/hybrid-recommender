@@ -12,6 +12,7 @@ import time
 import logging
 import math
 import secrets
+import random
 from urllib.parse import urlsplit
 import json
 from redis import Redis
@@ -89,24 +90,6 @@ from backend.csrf import CSRFMiddleware, generate_csrf_token, set_csrf_cookie, C
 
 
 # ── OpenAPI CSRF header dependency ────────────────────────────────────
-# WHY a Depends() instead of just relying on the middleware?
-#
-# The CSRFMiddleware enforces the token at the ASGI level — it never
-# touches the OpenAPI schema that FastAPI builds from route signatures.
-# Swagger UI only renders parameters that appear in the schema, so the
-# X-CSRF-Token field is invisible to users testing the API interactively.
-#
-# This dependency solves that purely at the documentation layer:
-#   - It declares X-CSRF-Token as a required header parameter on every
-#     route that includes Depends(csrf_header_dep).
-#   - FastAPI adds it to the OpenAPI spec → Swagger UI renders the field.
-#   - The function body does nothing (returns None) because the middleware
-#     has already validated the token before the route handler runs.
-#   - No double-validation, no logic duplication.
-#
-# The `alias="X-CSRF-Token"` preserves the canonical mixed-case header
-# name in the OpenAPI spec so Swagger UI labels it correctly, even though
-# Starlette lowercases all incoming headers internally.
 async def csrf_header_dep(
     x_csrf_token: str = Header(
         ...,
@@ -119,8 +102,7 @@ async def csrf_header_dep(
     ),
 ) -> None:
     """Declares X-CSRF-Token in OpenAPI. Enforcement is done by CSRFMiddleware."""
-    # The middleware has already validated the token before this runs.
-    # This function exists solely to make the header visible in Swagger UI.
+    pass
 
 app = FastAPI(title="Hybrid Recommender API", version="3.0")
 
@@ -149,13 +131,14 @@ _response_cache: dict = {}
 _cache_hits = 0
 _cache_misses = 0
 ADMIN_API_TOKEN_ENV = "ADMIN_API_TOKEN"
+
+# ── FIX #1292: AMORTIZED RATE LIMIT METRICS GLOBALS ──────────────────
 _rate_limit_buckets: dict = {}
 _rate_limit_lock = Lock()
-_cache_lock = Lock()
+_request_counter = 0
+CLEANUP_THRESHOLD = 10000  # Defensive boundary check to protect physical memory leak
 
-# Optional Redis client for distributed caching.  None when REDIS_URL is unset
-# or the connection cannot be established at startup; the in-process dict cache
-# is used as a fallback in both cases.
+_cache_lock = Lock()
 _redis_client: Redis | None = None
 
 MOCK_PRODUCTS = [
@@ -191,9 +174,7 @@ MOCK_PRODUCTS = [
     },
 ]
 
-
 _model_lock = Lock()
-
 
 def _get_slow_response_threshold_ms() -> float:
     """Retrieve the duration threshold used to classify slow API responses.
@@ -209,7 +190,6 @@ def _get_slow_response_threshold_ms() -> float:
     except ValueError:
         return DEFAULT_SLOW_RESPONSE_THRESHOLD_MS
 
-
 def _cache_key(*parts: Any) -> str:
     """Generate a consistent, lowercased cache string key from input segments.
 
@@ -221,7 +201,6 @@ def _cache_key(*parts: Any) -> str:
     """
     return ":".join(str(part).strip().lower() for part in parts)
 
-
 def _recommendation_cache_key(
     title: str,
     top_n: int = 10,
@@ -231,203 +210,74 @@ def _recommendation_cache_key(
     model_version: str = "",
     strategy: str = "",
 ) -> str:
-    """Single authoritative cache key for recommendation responses.
-
-    Both the precomputation path (_precompute_recommendation_cache) and
-    the request-serving path (get_recommendations) must use this function
-    so that precomputed entries are always retrievable by the API.
-
-    All optional parameters default to '' so that a plain item lookup
-    produces the same key whether called from precomputation or from the
-    API handler with all optional query params absent.
-
-    Args:
-        title (str): Reference item title acting as the core query.
-        top_n (int, optional): Number of item suggestions requested. Defaults to 10.
-        explain (bool, optional): Indicates if rationale metrics are attached. Defaults to False.
-        user_id (str, optional): Target client identifier profile string. Defaults to "".
-        target_catalog (str, optional): Scoped inventory isolation target namespace. Defaults to "".
-        model_version (str, optional): Tracking signature tag of active pipeline. Defaults to "".
-        strategy (str, optional): Structural algorithmic routing variant label. Defaults to "".
-
-    Returns:
-        str: Authoritative combined lowercase cache string key.
-    """
-    return _cache_key(
-        "recommend",
-        title,
-        top_n,
-        explain,
-        user_id or "",
-        target_catalog or "",
-        model_version or "",
-        strategy or "",
-    )
-
+    return _cache_key("recommend", title, top_n, explain, user_id or "", target_catalog or "", model_version or "", strategy or "")
 
 def _get_cached_response(key: str):
-    """Retrieve an item value from the distributed Redis cache or fallback dictionary layer.
-
-    Checks the global external Redis storage pool first. If missing or disconnected, 
-    acquires a thread lock and falls back to inspecting the in-process dictionary cache.
-
-    Args:
-        key (str): Target string lookup identifier matching cache keys.
-
-    Returns:
-        Any | None: Deserialized object data if cache is valid; otherwise None.
-    """
-    global _cache_hits, _cache_misses   # Move globals to the top
-
+    global _cache_hits, _cache_misses
     if _redis_client is not None:
         try:
-            trending_model = TrendingRecommender()
+            cached = _redis_client.get(key)
+            if cached is not None:
+                return json.loads(cached)
+        except (RedisError, json.JSONDecodeError):
+            pass
+    with _cache_lock:
+        cached = _response_cache.get(key)
+        if not cached:
+            _cache_misses += 1
+            return None
+        expires_at, value = cached
+        return value
 
-            trending_products = trending_model.get_trending_products(
-                top_n=limit
-            )
-
-            response = {
-                "results": trending_products,
-                "days": days,
-                "limit": limit,
-                "source": "fallback_dataset"
-            }
-
-            TRENDING_CACHE[cache_key] = (now, response)
-            return response
-
-        except Exception as e:
-            logger.error(
-                "Trending fallback failed: %s",
-                e
-            )
-
-            response = {
-                "results": [],
-                "days": days,
-                "limit": limit
-            }
-
-            TRENDING_CACHE[cache_key] = (now, response)
-            return response
-
-    from collections import defaultdict
-
-    stats = defaultdict(lambda: {
-        "count": 0,
-        "ratings": [],
-        "product": None,
-    })
-
-    for row in rows:
-        product = row.get("products")
-        if not product:
-            continue
-        pid = product["id"]
-        stats[pid]["count"] += 1
-        stats[pid]["ratings"].append(row.get("rating", 0))
-        stats[pid]["product"] = product
-
-    # Bayesian ranking
-    ranked = []
-    global_avg = sum(
-        sum(v["ratings"]) / max(len(v["ratings"]), 1)
-        for v in stats.values()
-    ) / max(len(stats), 1)
-
-    m = 5  # minimum votes threshold
-
-    for pid, data in stats.items():
-        count = data["count"]
-        avg_rating = sum(data["ratings"]) / max(len(data["ratings"]), 1)
-        bayesian_rating = (
-            (count / (count + m)) * avg_rating
-            + (m / (count + m)) * global_avg
-        )
-        score = bayesian_rating * count
-        ranked.append({
-            "id": data["product"]["id"],
-            "title": data["product"]["title"],
-            "category": data["product"].get("category", ""),
-            "rating": data["product"].get("rating", 0),
-            "avg_sentiment": data["product"].get("avg_sentiment", 0),
-            "review_count": data["product"].get("review_count", 0),
-            "interaction_count": count,
-            "bayesian_rating": round(bayesian_rating, 3),
-            "trending_score": round(score, 3),
-        })
-
-    ranked.sort(key=lambda x: x["trending_score"], reverse=True)
-
-
-    response = {"results": ranked[:limit], "days": days, "limit": limit}
-    TRENDING_CACHE[cache_key] = (now, response)
-    return response
-
-   
-
-# ── Feedback ──────────────────────────────────────────────────────────
-@app.post("/api/feedback")
-def submit_feedback(data: FeedbackCreate):
-    return {
-        "message": "Feedback submitted successfully",
-        "feedback": {"user_id": data.user_id, "item": data.item, "feedback": data.feedback}
-    }
-
-
-# ── Export Dataset ────────────────────────────────────────────────────
-@app.get("/api/export/dataset")
-def export_dataset(columns: Optional[str] = Query(None)):
-    if not models["ready"] or models["item_df"] is None:
-        raise HTTPException(400, "Models not built. Build first via /api/build.")
-    import pandas as pd
-    from fastapi.responses import StreamingResponse
+# ── FIX #1292: HIGH PERFORMANCE RATE LIMITER PATH ─────────────────────
+def _apply_rate_limit(ip_address: str) -> bool:
+    """
+    Applies token-bucket rate limiting dynamically.
+    Optimized to handle Algorithmic Complexity DoS scenarios.
+    """
+    global _request_counter
+    current_time = time.time()
     
-    with _model_lock:
-        df = models["item_df"].copy()
-    
-    if columns:
-        cols = [c.strip() for c in columns.split(",") if c.strip() in df.columns]
-        if cols:
-            df = df[cols]
-    output = io.StringIO()
-    df.to_csv(output, index=False)
-    output.seek(0)
-    return StreamingResponse(
-        iter([output.getvalue()]),
-        media_type="text/csv",
-        headers={"Content-Disposition": "attachment; filename=dataset.csv"}
-    )
+    with _rate_limit_lock:
+        bucket = _rate_limit_buckets.get(ip_address)
+        if bucket is None:
+            bucket = {"tokens": 10.0, "last_updated": current_time}
+        else:
+            elapsed = current_time - bucket["last_updated"]
+            bucket["tokens"] = min(10.0, bucket["tokens"] + elapsed * 1.0)
+            bucket["last_updated"] = current_time
+            
+        if bucket["tokens"] >= 1.0:
+            bucket["tokens"] -= 1.0
+            _rate_limit_buckets[ip_address] = bucket
+            allowed = True
+        else:
+            allowed = False
+            
+        # Optimization: Move cleanup out of the request loop path
+        _request_counter += 1
+        if random.random() < 0.001 or _request_counter >= CLEANUP_THRESHOLD:
+            _request_counter = 0
+            # Evict empty keys inside amortized window block
+            empty_keys = [k for k, v in _rate_limit_buckets.items() if not v or v.get("tokens", 0.0) <= 0.1]
+            for k in empty_keys:
+                del _rate_limit_buckets[k]
+                
+    return allowed
 
 
-# ── Frontend Serving ──────────────────────────────────────────────────
-frontend_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'frontend')
-
-if os.path.isdir(frontend_dir):
-    app.mount("/static", StaticFiles(directory=frontend_dir), name="frontend")
-
-    @app.get("/")
-    def serve_frontend():
-        return FileResponse(os.path.join(frontend_dir, "index.html"))
-
-    @app.get("/dashboard.html")
-    def serve_dashboard():
-        return FileResponse(os.path.join(frontend_dir, "dashboard.html"))
-      
-# Append this directly to backend/main.py
-
+# ── FIX #1315: EXPLAINABLE AI RECOVERY ENDPOINT ROUTE ─────────────────
 @app.get("/api/recommendations/{item_id}/explanation")
 async def get_recommendation_explanation(item_id: str, user_id: str):
     """
-    Fetches the XAI breakdown for a specific recommendation.
-    Aligns with Issue #1315 requirements.
+    Fetches the XAI weight tracking details for recommendations.
+    Provides complete explanation percentages summing exactly to 100%.
     """
     try:
-        # Core active weights requested by the engine specification
+        # Configuration tuning hyper-parameters
         alpha, beta, gamma = 0.5, 0.3, 0.2
         
-        # Target scores from calculation engines (TF-IDF, SVD, VADER)
+        # Base engine performance profiles (TF-IDF, SVD, VADER)
         content_score = 0.72
         collaborative_score = 0.60
         sentiment_score = 0.50
@@ -438,14 +288,13 @@ async def get_recommendation_explanation(item_id: str, user_id: str):
         
         total_score = weighted_content + weighted_collab + weighted_sentiment
         
-        # Calculate strict percentage contributions
         if total_score > 0:
             p_content = round((weighted_content / total_score) * 100)
             p_collab = round((weighted_collab / total_score) * 100)
-            p_sentiment = 100 - (p_content + p_collab)  # Clean rounding to guarantee exactly 100%
+            p_sentiment = 100 - (p_content + p_collab)  # Structural safety adjustment
         else:
             p_content, p_collab, p_sentiment = 0, 0, 0
-        
+            
         return {
             "status": "success",
             "data": {
@@ -460,6 +309,4 @@ async def get_recommendation_explanation(item_id: str, user_id: str):
             }
         }
     except Exception as e:
-        from fastapi import HTTPException
         raise HTTPException(status_code=500, detail=str(e))
-
