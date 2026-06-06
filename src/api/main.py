@@ -12,6 +12,9 @@ from src.api.response_utils import success_response, error_response
 from pydantic import BaseModel
 from typing import Optional
 
+import logging
+logger = logging.getLogger(__name__)
+
 # Calculate absolute paths and load environment variables first
 CURRENT_DIR = Path(__file__).parent.resolve()
 PROJECT_ROOT = CURRENT_DIR.parent.parent  # Steps out of src/api to project root
@@ -85,7 +88,7 @@ def startup_event():
             break
 
     if not loaded:
-        print("Warning: No datasets found for API startup.")
+        logger.warning("Warning: No datasets found for API startup.")
         return
 
     interaction_df, item_df = dm.merge_all()
@@ -134,6 +137,9 @@ def get_recommendations(req: RecommendationRequest):
             causal_config=causal_cfg,
         )
 
+
+
+
         recs = model.recommend(title=req.query, user_id=req.user_id, top_n=req.top_n)
         return success_response(
             recommendations=recs,
@@ -149,19 +155,49 @@ def get_recommendations(req: RecommendationRequest):
         logger = logging.getLogger("uvicorn.error")
         logger.error(f"Primary recommendation engine failed: {str(exc)}. Triggering popularity fallback.")
         
-        fallback_recs = validate_recommendations(
-            None,
-            top_n=req.top_n,
-            default_fallback_items=_item_df["title"].tolist() if _item_df is not None and not _item_df.empty else None,
-            context="hybrid"
-        )
-        
-        return success_response(
-            recommendations=fallback_recs,
-            model_name="hybrid",
-            message="Primary pipeline encountered an error. Serving trending fallback layout.",
-            causal_debiasing_applied=False,
-            fallback=True,
-            note="Primary pipeline encountered an error. Serving trending fallback layout."
-        )
+        try:
+            # Fallback calculation: safe data pull from the global item dataframe
+            if '_item_df' in globals() and _item_df is not None and not _item_df.empty:
+                # Fall back to picking items safely from your active dataframe asset
+                popular_items = _item_df.head(req.top_n)["title"].tolist()
+            else:
+                # Absolute zero-dependency static default array
+                popular_items = ["Top Trending Item A", "Top Trending Item B", "Top Trending Item C"]
+            
+            # Format the payload items to mimic real recommendation results
+            fallback_recs = [
+                {
+                    "title": item,
+                    "hybrid_score": 1.0,
+                    "content_score": "—",
+                    "collab_score": "—",
+                    "sentiment_score": "—",
+                    "rating": "5.0",
+                    "category": "Trending"
+                }
+                for item in popular_items
+            ]
+            
+            return success_response(
+                recommendations=fallback_recs,
+                model_name="hybrid",
+                message="Primary pipeline encountered an error. Serving trending fallback layout.",
+                causal_debiasing_applied=False,
+                fallback=True,
+                note="Primary pipeline encountered an error. Serving trending fallback layout."
+            )
+            
+        except Exception as fallback_exc:
+            logger.critical(f"Critical System Outage: Fallback engine failed: {str(fallback_exc)}")
+
+            return JSONResponse(
+                status_code=500,
+                content=error_response(
+                    message="Recommendation engine completely offline.",
+                    model_name="hybrid",
+                    detail="Recommendation engine completely offline."
+                )
+            )
+
+
 
