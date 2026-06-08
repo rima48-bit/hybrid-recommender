@@ -1270,6 +1270,32 @@ async function loadRecommendationsOverHttp(title) {
     renderRecommendations(data);
 }
 
+// ── Recommendation Skeleton Loading ────────────────────────────────
+function renderRecSkeletons(count = 6) {
+  const strip = els.recsStrip;
+  strip.innerHTML = '';
+  strip.classList.add('skeleton-loading');
+  for (let i = 0; i < count; i++) {
+    const card = document.createElement('div');
+    card.className = 'rec-card skeleton';
+    card.innerHTML = `
+      <div class="skeleton rec-skel-image"></div>
+      <div class="rec-skel-content">
+        <div class="skeleton rec-skel-line rec-skel-title"></div>
+        <div class="skeleton rec-skel-line rec-skel-subtitle"></div>
+        <div class="skeleton rec-skel-line rec-skel-rating"></div>
+      </div>
+    `;
+    strip.appendChild(card);
+  }
+}
+
+function clearRecSkeletons() {
+  const strip = els.recsStrip;
+  strip.classList.remove('skeleton-loading');
+  strip.querySelectorAll('.rec-card.skeleton').forEach(el => el.remove());
+}
+
 async function loadRecommendations(title) {
     if (!state.modelReady) {
         toast('Build models first to get recommendations', 'info');
@@ -1285,37 +1311,19 @@ async function loadRecommendations(title) {
 )
 .hidden=true;
 
-els.recsStrip.innerHTML=`
-<div class="recommendation-loading">
-
-<div class="loading-card"></div>
-
-<div class="loading-card"></div>
-
-<div class="loading-card"></div>
-
-</div>
-`;
-    els.recsStrip.hidden = true;
-    els.recsStrip.innerHTML = '';
+    renderRecSkeletons(8);
+    els.recsStrip.hidden = false;
 
     try {
         const data = await API.get(`/api/recommend?title=${encodeURIComponent(title)}&top_n=12`);
         const recs = data.results || data.recommendations || [];
 
+        clearRecSkeletons();
         els.recsLoader.hidden = true;
-        els.recsStrip.hidden = false;
 
-        if (!recs.length) {
-    els.recsStrip.innerHTML = `
-        <div class="empty-recommendations">
-            <span class="empty-icon" aria-hidden="true">🔍</span>
-            <p>No recommendations found. Try a different product!</p>
-        </div>
-    `;
-    return;
-}
+        renderRecommendations(data);
     } catch {
+        clearRecSkeletons();
         try {
             await loadRecommendationsOverHttp(title);
         } catch {
