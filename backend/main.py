@@ -439,7 +439,6 @@ def _apply_rate_limit(
     return None
 
 
-
 def _extract_bearer_token(value: str | None) -> str:
     if not value:
         return ""
