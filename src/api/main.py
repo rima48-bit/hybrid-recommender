@@ -177,3 +177,10 @@ def get_recommendations(req: RecommendationRequest):
                 detail="Recommendation engine completely offline.",
             )
 
+
+@app.post("/recommendations")
+def get_recommendations_legacy(req: RecommendationRequest):
+    """
+    Backward-compatible alias for clients and issue reports that call /recommendations.
+    """
+    return get_recommendations(req)

@@ -1933,6 +1933,112 @@ def train_federated(
         "build_time_seconds": build_time,
     }
 
+def build_models():
+    with _model_lock:
+        sb = get_supabase()
+
+        all_products = []
+        page_size = 1000
+        offset = 0
+
+        while True:
+            result = sb.table('products').select(
+                'id, title, description, category, rating, avg_sentiment, review_count'
+            ).range(offset, offset + page_size - 1).execute()
+
+            batch = result.data or []
+            all_products.extend(batch)
+
+            if len(batch) < page_size:
+                break
+
+            offset += page_size
+
+        if not all_products:
+            raise HTTPException(400, "No products in database. Upload data first.")
+
+        import pandas as pd
+
+        item_df = pd.DataFrame(all_products)
+
+        item_df['combined'] = (
+            item_df['title'].astype(str) + ' ' +
+            item_df['description'].fillna('').astype(str) + ' ' +
+            item_df['category'].fillna('').astype(str)
+        )
+
+        item_df['review_count'] = item_df['review_count'].fillna(0).astype(int)
+
+        start_time = time.time()
+
+        content_model = ContentRecommender(item_df)
+
+        collab_model = None
+        with _model_lock:
+            try:
+                purchases_result = sb.table('purchases').select(
+                    'user_id, product_id, rating'
+                ).limit(50000).execute()
+
+                purchases = purchases_result.data or []
+
+                if len(purchases) > 10:
+                    product_title_map = {
+                        p['id']: p['title']
+                        for p in all_products
+                    }
+
+                    interaction_rows = []
+
+                    for p in purchases:
+                        title = product_title_map.get(p['product_id'])
+
+                        if title:
+                            interaction_rows.append({
+                                'user_id': p['user_id'],
+                                'title': title,
+                                'rating': p.get('rating', 3.0)
+                            })
+
+                    if len(interaction_rows) > 10:
+                        interaction_df = pd.DataFrame(interaction_rows)
+
+                        if interaction_df['user_id'].nunique() > 1:
+                            collab_model = CollaborativeRecommender(interaction_df)
+
+            except Exception as e:
+                logger.warning(
+                    "Collaborative model data load failed: %s",
+                    e
+                )
+
+        hybrid_model = HybridRecommender(
+            content_model,
+            collab_model,
+            item_df
+        )
+
+        build_time = round(time.time() - start_time, 2)
+
+        models["content"] = content_model
+        models["collab"] = collab_model
+        models["hybrid"] = hybrid_model
+        models["item_df"] = item_df
+        models["ready"] = True
+        models["build_time"] = build_time
+        models["last_trained_at"] = datetime.now(
+            timezone.utc
+        ).isoformat()
+
+        _clear_response_cache()
+
+        return {
+            "message": "Models built successfully!",
+            "items": len(item_df),
+            "has_collaborative": collab_model is not None,
+            "build_time_seconds": build_time,
+        }
+
 
 # ── Recommendations ───────────────────────────────────────────────────
 @app.get("/api/recommend")
@@ -1997,27 +2103,46 @@ def get_recommendations(
         _set_cache_headers(response, "HIT")
         return cached
 
-    if not models["ready"]:
-        raise HTTPException(400, "Models not built. Build first via /api/build.")
+    with _model_lock:
+        hybrid_model = selected_models["hybrid"]
 
-    active_hybrid = models["hybrid"]
-    if model_version and model_version in MODEL_REGISTRY:
-        active_hybrid = MODEL_REGISTRY[model_version]["hybrid"]
+    if hybrid_model is None:
+        raise HTTPException(
+            status_code=500,
+            detail="Hybrid model not available."
+        )
 
-    import inspect
-    recommend_func = active_hybrid.recommend
-    sig = inspect.signature(recommend_func)
-    recommend_kwargs = {"top_n": top_n}
-    if "explain" in sig.parameters:
-        recommend_kwargs["explain"] = explain
-    if "target_catalog" in sig.parameters:
-        recommend_kwargs["target_catalog"] = target_catalog
-    if "user_id" in sig.parameters:
-        recommend_kwargs["user_id"] = user_id
-    recs = recommend_func(query_title, **recommend_kwargs)
+    recs = hybrid_model.recommend(
+        query_title,
+        top_n=top_n,
+        explain=explain,
+        target_catalog=target_catalog
+    )
 
-    if not recs:
-        raise HTTPException(404, "Item not found or no recommendations.")
+    # Popularity fallback (existing behaviour)
+    if not recs and strategy == "popularity" and models["collab"]:
+        recs = models["collab"]._popularity_fallback(top_n)
+
+    # Cold-start fallback: blend content similarity with popularity/rating
+    if not recs and strategy == "cold":
+        combined_text = query_title
+        cold_recs = cold_start_recommendation(
+            combined_text,
+            top_n=top_n,
+            target_catalog=target_catalog
+        )
+        if cold_recs:
+            recs = cold_recs
+        if not recs:
+            return JSONResponse(
+                status_code=404,
+                content=error_response(
+                    message="Item not found or no recommendations.",
+                    model_name="hybrid",
+                    version=model_version or ACTIVE_MODEL_VERSION,
+                    detail="Item not found or no recommendations."
+                )
+            )
 
     has_history = False
     if user_id and models.get("collab") is not None:
@@ -2090,6 +2215,35 @@ def get_recommendations(
     _set_cached_response(cache_key, payload)
     _set_cache_headers(response, "MISS")
     return payload
+
+
+@app.get("/api/recommendations")
+@app.get("/api/recommendations/{item_title}")
+def get_recommendations_alias(
+    request: Request,
+    response: Response,
+    item_title: Optional[str] = None,
+    title: Optional[str] = Query(None),
+    top_n: int = 10,
+    explain: bool = Query(False),
+    user_id: Optional[str] = Query(None),
+    target_catalog: Optional[str] = Query(None),
+    model_version: Optional[str] = Query(None),
+    strategy: Optional[str] = Query(None),
+):
+    """Backward-compatible alias for clients calling /api/recommendations."""
+    return get_recommendations(
+        request=request,
+        response=response,
+        item_title=item_title,
+        title=title,
+        top_n=top_n,
+        explain=explain,
+        user_id=user_id,
+        target_catalog=target_catalog,
+        model_version=model_version,
+        strategy=strategy,
+    )
 
 
 
@@ -2803,4 +2957,6 @@ class SearchRequest(BaseModel):
     limit: Optional[int] = 5
 
 
-
+    @app.get("/dashboard.html")
+    def serve_dashboard():
+        return FileResponse(os.path.join(frontend_dir, "dashboard.html"))
